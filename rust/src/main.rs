@@ -1,10 +1,11 @@
 use futures_util::{SinkExt as _, StreamExt};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, broadcast, mpsc}; // broadcast を追加
 use tokio_tungstenite::accept_async;
-use tungstenite::protocol::Message;
+use tungstenite::protocol::Message; // 追加
 
 #[tokio::main]
 async fn main() {
@@ -22,6 +23,32 @@ async fn main() {
         let mut guard = shared_received_msg_list.lock().await;
         guard.push(Message::text("fast msg"));
     }
+
+    // 標準入力からのメッセージをブロードキャストするタスク
+    let stdin_broadcast_tx = broadcast_tx.clone();
+    tokio::spawn(async move {
+        println!("Enter messages to broadcast to all clients. Type 'exit' to stop this input.");
+        let mut stdin = BufReader::new(tokio::io::stdin()).lines();
+        while let Ok(Some(line)) = stdin.next_line().await {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if line.trim() == "exit" {
+                println!("Exiting stdin broadcast.");
+                break;
+            }
+            if stdin_broadcast_tx
+                .send(Message::text(line.clone()))
+                .is_err()
+            {
+                eprintln!(
+                    "Failed to broadcast stdin message. No active subscribers or channel lagged."
+                );
+            } else {
+                println!("Broadcasted from stdin: {}", line);
+            }
+        }
+    });
 
     while let Ok((stream, _)) = listener.accept().await {
         let connections_clone = Arc::clone(&active_connections);
